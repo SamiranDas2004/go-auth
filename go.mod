@@ -3,12 +3,13 @@ module github.com/SamiranDas2004/go-auth
 go 1.22.3
 
 require (
-	github.com/golang-jwt/jwt/v5 v5.2.1
 	github.com/gorilla/mux v1.8.1
 	go.mongodb.org/mongo-driver v1.15.0
 )
 
 require (
+	github.com/golang-jwt/jwt v3.2.2+incompatible
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/golang/snappy v0.0.1 // indirect
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/klauspost/compress v1.17.8 // indirect
