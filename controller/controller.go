@@ -12,7 +12,6 @@ import (
 	"github.com/SamiranDas2004/go-auth/dbconnect"
 	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -57,13 +56,14 @@ func Register(w http.ResponseWriter, r *http.Request) {
 	filter := bson.M{"email": req.Email}
 
 	existUser := collection.FindOne(context.Background(), filter).Decode(&existingUser)
-	if existUser == nil {
+	if existUser != nil {
 		http.Error(w, "User already exists", http.StatusBadRequest)
 		return
-	} else if existUser != mongo.ErrNoDocuments {
-		http.Error(w, existUser.Error(), http.StatusInternalServerError)
-		return
 	}
+	// else if existUser != mongo.ErrNoDocuments {
+	// 	http.Error(w, existUser.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
 
 	// Insert the new user into the collection
 	_, err = collection.InsertOne(context.Background(), req)
