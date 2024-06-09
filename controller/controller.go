@@ -1,142 +1,123 @@
-// controller/controller.go
-
 package controller
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
+	"log"
 	"time"
 
 	"github.com/SamiranDas2004/go-auth/dbconnect"
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/SamiranDas2004/go-auth/model"
+	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt"
 	"go.mongodb.org/mongo-driver/bson"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Register is a handler for user registration
-func Register(w http.ResponseWriter, r *http.Request) {
-	// Set content type header
-	w.Header().Set("Content-Type", "application/json")
+func Register(c *fiber.Ctx) error {
+	var data map[string]string
 
-	// Parse request body
-	var req struct {
-		Username string `json:"username"`
-		Email    string `json:"email"`
-		Password string `json:"password"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	if err := c.BodyParser(&data); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "cannot parse JSON"})
 	}
 
-	// Validate request fields
-	if req.Username == "" || req.Email == "" || req.Password == "" {
-		http.Error(w, "username, email, and password are required", http.StatusBadRequest)
-		return
-	}
-
-	// Hash password with bcrypt
-	HashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	password, err := bcrypt.GenerateFromPassword([]byte(data["password"]), 14)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "cannot hash password"})
 	}
 
-	// Update request struct with hashed password
-	req.Password = string(HashedPassword)
+	user := model.User{
+		Name:     data["name"],
+		Email:    data["email"],
+		Password: string(password),
+	}
 
-	// Get the MongoDB collection
 	collection := dbconnect.ConnectMongoDB()
 
-	var existingUser struct {
-		Email string `json:"email"`
+	// Check if a user with the same email already exists
+	filter := bson.M{"email": data["email"]}
+	var existingUser model.User
+	err = collection.FindOne(context.Background(), filter).Decode(&existingUser)
+	if err == nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "user already exists with this email"})
 	}
-	filter := bson.M{"email": req.Email}
 
-	existUser := collection.FindOne(context.Background(), filter).Decode(&existingUser)
-	if existUser != nil {
-		http.Error(w, "User already exists", http.StatusBadRequest)
-		return
-	}
-	// else if existUser != mongo.ErrNoDocuments {
-	// 	http.Error(w, existUser.Error(), http.StatusInternalServerError)
-	// 	return
-	// }
-
-	// Insert the new user into the collection
-	_, err = collection.InsertOne(context.Background(), req)
+	_, err = collection.InsertOne(context.Background(), user)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "cannot insert user"})
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{"message": "User registered successfully"})
+	log.Println("User registered:", user) // Logging for debugging
+
+	return c.JSON(user)
 }
-
-func Login(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-
-	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+func Login(c *fiber.Ctx) error {
+	// Parse request body
+	var data map[string]string
+	if err := c.BodyParser(&data); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "cannot parse JSON"})
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	// Check if email and password fields are present
+	email, ok := data["email"]
+	if !ok || email == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "email field is missing"})
+	}
+	password, ok := data["password"]
+	if !ok || password == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "password field is missing"})
 	}
 
-	if req.Email == "" || req.Password == "" {
-		http.Error(w, "Email and Password is Required", http.StatusBadRequest)
-		return
-	}
-
+	// Connect to MongoDB
 	collection := dbconnect.ConnectMongoDB()
 
-	filter := bson.M{"email": req.Email}
-	var user bson.M
-	if err := collection.FindOne(context.Background(), filter).Decode(&user); err != nil {
-		// Handle error or return appropriate response
-		http.Error(w, "User not found", http.StatusNotFound)
-		return
-	}
-
-	// Extract hashed password from the user object
-	hashedPassword, ok := user["password"].(string)
-	fmt.Println(hashedPassword)
-	if !ok {
-		http.Error(w, "Invalid password format in the database", http.StatusInternalServerError)
-		return
-	}
-
-	// Compare hashed passwords
-	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(req.Password))
+	// Find user by email
+	var user model.User
+	err := collection.FindOne(context.Background(), bson.M{"email": email}).Decode(&user)
 	if err != nil {
-		http.Error(w, "Invalid password", http.StatusUnauthorized)
-		return
+		// If the user is not found, return the same error message for security reasons
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid email or password"})
 	}
 
-	// Passwords match, user is authenticated
-	fmt.Println("User authenticated successfully")
-
-	// Here you could compare passwords, but for simplicity, let's assume the user exists
+	// Compare the provided password with the stored hashed password
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password))
+	if err != nil {
+		// If the password does not match, return the same error message for security reasons
+		log.Println("Password comparison failed:", err) // Logging for debugging
+		return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid email or password"})
+	}
 
 	// Generate JWT token
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"email": req.Email,
-		// You can add more claims here such as user ID, roles, etc.
-		"exp": time.Now().Add(time.Hour * 24).Unix(), // Token expires in 24 hours
+		"email": email,
+		"exp":   time.Now().Add(time.Hour * 24).Unix(), // Token expiry time
 	})
 
-	// Sign the token with a secret
-	tokenString, err := token.SignedString([]byte("juigfuweq89qwcur8cqiwutwhtuwheuthwurhthwthw45tuhw utvwue"))
+	// Sign the token with a secret key and get the complete encoded token as a string
+	tokenString, err := token.SignedString([]byte("whatislovebabaydonthurtme"))
 	if err != nil {
-		http.Error(w, "Error generating token", http.StatusInternalServerError)
-		return
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to generate token"})
 	}
 
-	// Respond with token
-	json.NewEncoder(w).Encode(map[string]string{"user logedin ": tokenString})
+	// Set the JWT token as a cookie
+	c.Cookie(&fiber.Cookie{
+		Name:     "jwt",
+		Value:    tokenString,
+		Expires:  time.Now().Add(time.Hour * 24),
+		HTTPOnly: true,
+	})
+
+	// If the credentials are correct, return the JWT token
+	return c.JSON(fiber.Map{"message": "Logged in", "token": tokenString})
+}
+
+func Logout(c *fiber.Ctx) error {
+	// Set the JWT token as an expired cookie
+	c.Cookie(&fiber.Cookie{
+		Name:     "jwt",
+		Value:    "",
+		Expires:  time.Now().Add(-time.Hour),
+		HTTPOnly: true,
+	})
+
+	return c.JSON(fiber.Map{"message": "Logged out"})
 }
